@@ -1,0 +1,370 @@
+<!doctype><html><head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Odyssey.js Slides</title>
+  <meta name="description" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="icon" type="image/x-icon" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+  <link rel="icon" type="image/png" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+
+  <link rel="stylesheet" href="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/themes/css/cartodb.css">
+  <link rel="stylesheet" href="http://cartodb.github.io/odyssey.js/sandbox/css/slides.css">
+  <script src="http://cartodb.github.io/odyssey.js/vendor/modernizr-2.6.2.min.js"></script>
+</head>
+<body>
+  <div id="map" style="width: 100%; height: 100%;"></div>
+
+  <div id="slides_container" style="display:block;">
+    <div id="dots"></div>
+
+    <div id="slides"></div>
+
+    <ul id="navButtons">
+      <li><a class="prev"></a></li>
+      <li><a class="next"></a></li>
+    </ul>
+  </div>
+
+  <div id="credits">
+    <span class="title" id="title">Title</span>
+    <span class="author"><strong id="author">By Name using</strong> <a href="http://cartodb.github.io/odyssey.js/">Odyssey.js</a><span>
+  </span></span></div>
+
+  <script src="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/cartodb.js"></script>
+  <script src="http://cartodb.github.io/odyssey.js/dist/odyssey.js" charset="UTF-8"></script>
+
+  <script>
+    var resizePID;
+
+    function clearResize() {
+      clearTimeout(resizePID);
+      resizePID = setTimeout(function() { adjustSlides(); }, 100);
+    }
+
+    if (!window.addEventListener) {
+      window.attachEvent("resize", function load(event) {
+        clearResize();
+      });
+    } else {
+      window.addEventListener("resize", function load(event) {
+        clearResize();
+      });
+    }
+
+    function adjustSlides() {
+      var container = document.getElementById("slides_container"),
+          slide = document.querySelectorAll('.selected_slide')[0];
+
+      if (slide) {
+        if (slide.offsetHeight+169+40+80 >= window.innerHeight) {
+          container.style.bottom = "80px";
+
+          var h = container.offsetHeight;
+
+          slide.style.height = h-169+"px";
+          slide.classList.add("scrolled");
+        } else {
+          container.style.bottom = "auto";
+          container.style.minHeight = "0";
+
+          slide.style.height = "auto";
+          slide.classList.remove("scrolled");
+        }
+      }
+    }
+
+    var resizeAction = O.Action(function() {
+      function imageLoaded() {
+        counter--;
+
+        if (counter === 0) {
+          adjustSlides();
+        }
+      }
+      var images = $('img');
+      var counter = images.length;
+
+      images.each(function() {
+        if (this.complete) {
+          imageLoaded.call( this );
+        } else {
+          $(this).one('load', imageLoaded);
+        }
+      });
+    });
+
+    function click(el) {
+      var element = O.Core.getElement(el);
+      var t = O.Trigger();
+
+      // TODO: clean properly
+      function click() {
+        t.trigger();
+      }
+
+      if (element) element.onclick = click;
+
+      return t;
+    }
+
+    O.Template({
+      init: function() {
+        var seq = O.Triggers.Sequential();
+
+        var baseurl = this.baseurl = 'http://{s}.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+        var map = this.map = L.map('map').setView([0, 0.0], 4);
+        var basemap = this.basemap = L.tileLayer(baseurl, {
+          attribution: 'data OSM - map CartoDB'
+        }).addTo(map);
+
+        // enanle keys to move
+        O.Keys().on('map').left().then(seq.prev, seq)
+        O.Keys().on('map').right().then(seq.next, seq)
+
+        click(document.querySelectorAll('.next')).then(seq.next, seq)
+        click(document.querySelectorAll('.prev')).then(seq.prev, seq)
+
+        var slides = O.Actions.Slides('slides');
+        var story = O.Story()
+
+        this.story = story;
+        this.seq = seq;
+        this.slides = slides;
+        this.progress = O.UI.DotProgress('dots').count(0);
+      },
+
+      update: function(actions) {
+        var self = this;
+
+        if (!actions.length) return;
+
+        this.story.clear();
+
+        if (this.baseurl && (this.baseurl !== actions.global.baseurl)) {
+          this.baseurl = actions.global.baseurl || 'http://0.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+
+          this.basemap.setUrl(this.baseurl);
+        }
+
+        if (this.cartoDBLayer && ("http://"+self.cartoDBLayer.options.user_name+".cartodb.com/api/v2/viz/"+self.cartoDBLayer.options.layer_definition.stat_tag+"/viz.json" !== actions.global.vizjson)) {
+          this.map.removeLayer(this.cartoDBLayer);
+
+          this.cartoDBLayer = null;
+          this.created = false;
+        }
+
+        if (actions.global.vizjson && !this.cartoDBLayer) {
+          if (!this.created) { // sendCode debounce < vis loader
+            cdb.vis.Loader.get(actions.global.vizjson, function(vizjson) {
+              self.map.fitBounds(vizjson.bounds);
+
+              cartodb.createLayer(self.map, vizjson)
+                .done(function(layer) {
+                  self.cartoDBLayer = layer;
+
+                  var sublayer = layer.getSubLayer(0),
+                      layer_name = layer.layers[0].options.layer_name,
+                      filter = actions.global.cartodb_filter ? " WHERE "+actions.global.cartodb_filter : "";
+
+                  sublayer.setSQL("SELECT * FROM "+layer_name+filter)
+
+                  self.map.addLayer(layer);
+
+                  self._resetActions(actions);
+                }).on('error', function(err) {
+                  console.log("some error occurred: " + err);
+                });
+            });
+
+            this.created = true;
+          }
+
+          return;
+        }
+
+        this._resetActions(actions);
+      },
+
+      _resetActions: function(actions) {
+        // update footer title and author
+        var title_ = actions.global.title === undefined ? '' : actions.global.title,
+            author_ = actions.global.author === undefined ? 'Using' : 'By '+actions.global.author+' using';
+
+        document.getElementById('title').innerHTML = title_;
+        document.getElementById('author').innerHTML = author_;
+        document.title = title_ + " | " + author_ +' Odyssey.js';
+
+        var sl = actions;
+
+        document.getElementById('slides').innerHTML = ''
+        this.progress.count(sl.length);
+
+        // create new story
+        for(var i = 0; i < sl.length; ++i) {
+          var slide = sl[i];
+          var tmpl = "<div class='slide' style='diplay:none'>";
+
+          tmpl += slide.html();
+          tmpl += "</div>";
+          document.getElementById('slides').innerHTML += tmpl;
+
+          this.progress.step(i).then(this.seq.step(i), this.seq)
+
+          var actions = O.Parallel(
+            this.slides.activate(i),
+            slide(this),
+            this.progress.activate(i),
+            resizeAction
+          );
+
+          actions.on("finish.app", function() {
+            adjustSlides();
+          });
+
+          this.story.addState(
+            this.seq.step(i),
+            actions
+          )
+        }
+
+        this.story.go(this.seq.current());
+      },
+
+      changeSlide: function(n) {
+        this.seq.current(n);
+      }
+    });
+  </script>
+
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-20934186-21', 'cartodb.github.io');
+    ga('send', 'pageview');
+  </script>
+
+  <script type="text/javascript" src="http://fast.fonts.net/jsapi/3af16084-ba56-49ca-b37d-0b49b59e1927.js"></script>
+
+<script id="md_template" type="text/template">```
+-baseurl: "https://2.maps.nlp.nokia.com/maptile/2.1/maptile/newest/normal.day/{z}/{x}/{y}/256/png8?lg=eng&token=A7tBPacePg9Mj_zghvKt9Q&app_id=KuYppsdXZznpffJsKT24"
+-title: "UC Berkeley Historic Landmarks, Pre-1940"
+-author: "Patty"
+-vizjson: "https://pfrontiera.carto.com/api/v2/viz/9e85ff46-65e3-11e6-a691-0e05a8b3e3d7/viz.json"
+```
+
+#UC Berkeley Historic Landmarks, Pre-1940
+```
+- center: [37.8709, -122.2586]
+- zoom: 16
+```
+
+This map highlights some of the pre-1940 historic landmaprks on the UC Berkeley Campus.
+
+
+This storymap was created as part of a [UC Berkeley Digital Humanities](digitalhumanities.berkeley.edu) workshop and is for educational/informational purposes only. The photographs were taken by workshop participants. The [descriptive data](http://berkeleyheritage.com/1967_UC_Berkeley_Buildings.html) for the landmarks is from a data table on the [Berkeley Architectural Heritage](http://berkeleyheritage.com) website.
+
+#South Hall, 1873
+```
+- center: [37.8717, -122.2578]
+- zoom: 17
+L.marker([37.8717, -122.2578]).actions.addRemove(S.map)
+```
+![South Hall](https://raw.githubusercontent.com/dlab-geo/dhbsi_geo_2016/master/medium/south_hall.jpg)
+
+First of two original buildings; cornerstone laid Oct. 9, 1872; fire–resistant building for laboratories of agriculture, physical and natural sciences; also housed library (to 1881) and office of secretary to Regents (to 1906); Offices of the President 1899–1906; continued in use for science, later mainly physics (to 1924); remodeled for Depts. of Political Science, Economics, Business Administration, and Sociology (to 1964).
+
+
+
+#Football Players Statue, 1900
+```
+- center: [37.8707, -122.2629]
+- zoom: 17
+L.marker([37.8707, -122.2629]).actions.addRemove(S.map)
+```
+![Football Players](https://raw.githubusercontent.com/dlab-geo/dhbsi_geo_2016/master/medium/football_players_text.jpg)
+The statue was the first permanent work of art on the Berkeley campus. The statue was purchased by San Francisco Mayor James Phelan who was a year younger than Tilden, and had studied at Cal. Phelan offered it in 1898 as a prize to the first team, Cal or Stanford, to subsequently win two Big Games in football.
+
+
+#Men's Faculty Club, 1903
+```
+- center: [37.8718, -122.2559]
+- zoom: 17
+L.marker([37.8718, -122.2559]).actions.addRemove(S.map)
+```
+![Men's Faculty Club](https://raw.githubusercontent.com/dlab-geo/dhbsi_geo_2016/master/medium/menfacclub.JPG)
+
+Club (for men) organized 1902; antecedent Dining Association met in University cottage; new clubhouse incorporated cottage as dining room and kitchen; includes additions, 1903, 1904 (John Galen Howard, arch.), 1914, 1925 (Warren Perry, arch.), 1959 (Downs and Lagorio, arch.).
+
+#California Hall, 1905
+```
+- center: [37.8719, -122.2602]
+- zoom: 17
+L.marker([37.8719, -122.2602]).actions.addRemove(S.map)
+```
+![California Hall](https://raw.githubusercontent.com/dlab-geo/dhbsi_geo_2016/master/medium/california_hall.jpg)
+
+Administration building (1905–41); remodeled for Institute of Industrial Relations and classrooms
+
+#Senior Hall, 1906
+```
+- center: [37.8719, -122.2554]
+- zoom: 17
+L.marker([37.8719, -122.2554]).actions.addRemove(S.map)
+```
+![Senior Hall](https://raw.githubusercontent.com/dlab-geo/dhbsi_geo_2016/master/medium/senior_hall.JPG)
+
+Meeting place originally restricted to senior men; later opened to all student organizations.
+
+#University House, 1911
+```
+- center: [37.8742, -122.2623]
+- zoom: 17
+L.marker([37.8742, -122.2623]).actions.addRemove(S.map)
+```
+![University House](https://raw.githubusercontent.com/dlab-geo/dhbsi_geo_2016/master/medium/university_house_gate.JPG)
+
+First building begun under the Benard Architectural Plan; ground broken by Mrs. Hearst on May 12, 1900; occupied by Presidents of University (1911–58), by Chancellor Heyns (1965–).
+
+#Sather Gate, 1913
+```
+- center: [37.8701, -122.2597]
+- zoom: 17
+L.marker([37.8701, -122.2597]).actions.addRemove(S.map)
+```
+![Sather Gate](https://raw.githubusercontent.com/dlab-geo/dhbsi_geo_2016/master/medium/sather_gate.JPG)
+
+Memorial to Peder Sather, San Francisco banker and trustee of College of California.
+
+#Sather Tower (Campanile), 1914
+```
+- center: [37.8721, -122.2579]
+- zoom: 17
+L.marker([37.8721, -122.2579]).actions.addRemove(S.map)
+```
+![Sather Tower](https://raw.githubusercontent.com/dlab-geo/dhbsi_geo_2016/master/medium/sather_tower.jpg)
+Memorial to Mrs. Jane K. Sather; widely known landmark, nicknamed for its resemblance to St. Mark’s Campanile in Venice, Italy; chimes (12 bronze bells) cast by John Taylor and Sons, Loughborough, England; delivery delayed by World War I; first played Nov. 2, 1917; tower and chimes dedicated Charter Day, 1918.
+
+
+#Sharing your story
+```
+- center: [40.4469, -28.5645]
+- zoom: 3
+```
+This Storymap was made with Odyssey.js
+
+You have different options for exporting your odyssey.js visualization. You can either embed this using an iframe, publishing with a click on bl.ocks or just share the URL of this visualization.
+
+If you want to customize it further, you can download the generated source code by clicking on the button below.
+
+#Advanced users
+
+Check out our [documentation](/odyssey.js/documentation/) to learn how to use odyssey to create more custom things. It's crazy the amount of cool things that can be done with the library.
+
+Also if you are a developer, take a look at our contributing guideline so you can push code to the actual library.
+
+Cheers!
+</script></body></html>
